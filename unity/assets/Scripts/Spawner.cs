@@ -15,16 +15,6 @@ public class Spawner : MonoBehaviour
     public float minSpawnRate = 1f;
     public float maxSpawnRate = 2f;
 
-    private void OnEnable()
-    {
-
-    }
-
-
-    private void OnDisable()
-    {
-       
-    }
     public void StartSpawn()
     {
        Invoke(nameof(Spawn), Random.Range(minSpawnRate, maxSpawnRate));

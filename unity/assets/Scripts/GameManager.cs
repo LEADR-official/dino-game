@@ -1,10 +1,6 @@
-using Leadr;
-using Leadr.Models;
 using System.Collections.Generic;
-using System.Threading.Tasks;
 using TMPro;
 using UnityEngine;
-using UnityEngine.InputSystem;
 using UnityEngine.UI;
 
 [DefaultExecutionOrder(-1)]
@@ -25,25 +21,16 @@ public class GameManager : MonoBehaviour
     [SerializeField] private TextMeshProUGUI playerNameText;
     [SerializeField] private TMP_InputField inputPlayerNameText;
     [SerializeField] private Transform submitNamePanel;
-    [SerializeField] private Transform leaderboardPanel;
-    [SerializeField] private Transform leaderBoardBtn;
     [SerializeField] private Button retryButton;
 
-    
-
     [Header("LEADR")]
-    [SerializeField] private LeadrSettings settings;
-    public const string BOARD_ID = "brd_956bad96-8a3c-4517-baa0-3c223a6f6e82";
-    public const string BEST_SCORE_BOARD_ID = "brd_a44f93db-9d23-4308-a301-0e4166da2ddb";
-
-    private LeadrClient leadrClient;
+    [SerializeField] private LeadrIntegration leadr;
 
     private Player player;
     private Spawner spawner;
 
     private float score;
     private int playTime;
-    private bool isSubmitting;
 
     private const string PLAYER_NAME_KEY = "PLAYER_NAME";
 
@@ -58,31 +45,13 @@ public class GameManager : MonoBehaviour
         }
 
         Instance = this;
-
-        // LEADR SDK initialization
-        leadrClient = new LeadrClient();
-        leadrClient.Initialize(settings);
-
-      
-
-
+        leadr.Initialize();
     }
 
-    private void OnEnable()
-    {
-       
-    }
-
-    private void OnDisable()
-    {
-       
-    }
     private void OnDestroy()
     {
         if (Instance == this)
             Instance = null;
-
-       
     }
 
     private void Start()
@@ -100,103 +69,6 @@ public class GameManager : MonoBehaviour
 
         spawner.StartSpawn();
         NewGame();
-    }
-
-    public void ToggleLeaderboard()
-    {
-        leaderboardPanel.gameObject.SetActive(!leaderboardPanel.gameObject.activeSelf);
-    }
-
-    public void CloseLeaderBoard()
-    {
-        leaderboardPanel.gameObject.SetActive(false);
-    }
-
-    public async Task GetLeadrBoardAsync()
-    {
-        // LEADR SDK: Fetch board by slug
-        var result = await leadrClient.GetBoardAsync("highscore");
-
-        if (!result.IsSuccess)
-            Debug.LogError(result.Error.Message);
-    }
-
-    private async Task SubmitScoreAsync()
-    {
-        if (isSubmitting)
-            return;
-
-        isSubmitting = true;
-
-        try
-        {
-            string playerName = PlayerPrefs.GetString(PLAYER_NAME_KEY, "Player");
-
-            long runScore = Mathf.FloorToInt(score);
-            long savedHighScore = Mathf.RoundToInt(PlayerPrefs.GetFloat("hiscore", 0));
-
-            var metadata = BuildMetadata();
-            string displayValue = scoreText?.text;
-
-            // LEADR SDK: Submit score to board
-            var result = await leadrClient.SubmitScoreAsync(
-                BOARD_ID,
-                runScore,
-                playerName,
-                displayValue,
-                metadata
-            );
-
-            if (!result.IsSuccess)
-                Debug.LogError(result.Error.Message);
-
-            if (runScore > savedHighScore)
-            {
-                Debug.Log("New high score! Submitting to best scores board.");
-                await SubmitBestScoreAsync(
-                    runScore,
-                    playerName,
-                    displayValue,
-                    metadata
-                );
-            }
-
-        }
-        finally
-        {
-            isSubmitting = false;
-        }
-    }
-
-    private async Task SubmitBestScoreAsync(
-    long score,
-    string playerName,
-    string displayValue,
-    Dictionary<string, object> metadata)
-    {
-        Debug.Log("Submitting best score to best scores board.");
-        var result = await leadrClient.SubmitScoreAsync(
-            BEST_SCORE_BOARD_ID,
-            score,
-            playerName,
-            displayValue,
-            metadata
-        );
-
-        if (!result.IsSuccess)
-            Debug.LogError(result.Error.Message);
-    }
-
-    private Dictionary<string, object> BuildMetadata()
-    {
-        return new Dictionary<string, object>
-        {
-            { "level_reached", Mathf.FloorToInt(gameSpeed) },
-            { "play_time_seconds", playTime },
-            { "difficulty", Mathf.FloorToInt(gameSpeed / initialGameSpeed) },
-            { "client_version", Application.version },
-            { "platform", Application.platform.ToString() }
-        };
     }
 
     private void ShowNameInput()
@@ -226,7 +98,6 @@ public class GameManager : MonoBehaviour
 
         foreach (var obstacle in FindObjectsOfType<Obstacle>())
             Destroy(obstacle.gameObject);
-        leaderBoardBtn.gameObject.SetActive(false);
 
         score = 0f;
         playTime = 0;
@@ -237,14 +108,13 @@ public class GameManager : MonoBehaviour
 
         gameOverText.gameObject.SetActive(false);
         retryButton.gameObject.SetActive(false);
+        leadr.HideLeaderboard();
 
         UpdateHighScore();
     }
 
     public void GameOver()
     {
-        _ = SubmitScoreAsync();
-
         isGameStarted = false;
         gameSpeed = 0f;
 
@@ -253,9 +123,15 @@ public class GameManager : MonoBehaviour
 
         gameOverText.gameObject.SetActive(true);
         retryButton.gameObject.SetActive(true);
-        leaderBoardBtn.gameObject.SetActive(true);
 
         UpdateHighScore();
+
+        // Submit score to LEADR and show the leaderboard
+        _ = leadr.SubmitScoreAndShowLeaderboardAsync(
+            Mathf.FloorToInt(score),
+            PlayerPrefs.GetString(PLAYER_NAME_KEY, "Player"),
+            scoreText?.text,
+            BuildMetadata());
     }
 
     private void Update()
@@ -270,6 +146,18 @@ public class GameManager : MonoBehaviour
         scoreText.text = Mathf.FloorToInt(score).ToString("D5");
     }
 
+    private Dictionary<string, object> BuildMetadata()
+    {
+        return new Dictionary<string, object>
+        {
+            { "level_reached", Mathf.FloorToInt(gameSpeed) },
+            { "play_time_seconds", playTime },
+            { "difficulty", Mathf.FloorToInt(gameSpeed / initialGameSpeed) },
+            { "client_version", Application.version },
+            { "platform", Application.platform.ToString() }
+        };
+    }
+
     private void UpdateHighScore()
     {
         float highScore = PlayerPrefs.GetFloat("hiscore", 0f);
@@ -281,13 +169,5 @@ public class GameManager : MonoBehaviour
         }
 
         hiscoreText.text = Mathf.FloorToInt(highScore).ToString("D5");
-    }
-    private bool IsNewHighScore(long score)
-    {
-        long savedHighScore = Mathf.RoundToInt(
-            PlayerPrefs.GetFloat("hiscore", 0)
-        );
-
-        return score > savedHighScore;
     }
 }
